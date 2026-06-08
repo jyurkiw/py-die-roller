@@ -81,6 +81,27 @@ d.pool('12d6+1t4')          # per-die +1, then count results >= 4
 d.pool('8d6+4d6+1t4')       # compound: 8d6 plain + 4d6 with per-die +1
 d.pool('8d10+2+4d10-1t5')   # compound with mixed per-die modifiers
 
+# Exploding rolls — re-roll and add when a die meets the threshold
+d.roll('3d6e')              # explode on max (6); result can exceed 18
+d.roll('3d6e5')             # explode on 5 or higher
+d.roll('3d6e!')             # cascade: exploded dice can also explode
+d.roll('3d6e5!')            # cascade explode on 5+
+d.roll('4d6e!+3d8e7!')      # per-segment thresholds (chain roll)
+
+# Imploding rolls — re-roll and subtract when a die meets the threshold
+d.roll('3d6i')              # implode on min (1); result can be <= 0
+d.roll('3d6i2')             # implode on 1 or 2
+
+# Exploding pools — add an extra die to the pool for each triggered die
+d.pool('12d6e')             # explode on 6; pool may grow beyond 12
+d.pool('12d6et4')           # explode on 6, then count successes >= 4
+d.pool('12d6t4e')           # threshold and explosion spec order is flexible
+d.pool('8d6e+4d6+1e5t4')    # compound: each group has its own threshold
+
+# Imploding pools — each triggered die negates one success
+d.pool('4d6it3')            # implode on 1; each implode negates a success
+d.pool('4d6e5i2t4')         # explode on 5+, implode on 1–2, threshold 4
+
 # Spawn independent, non-overlapping streams (safe for parallel work)
 workers = d.spawn(8)
 results = [w.roll('3d6') for w in workers]
@@ -96,6 +117,16 @@ results = [w.roll('3d6') for w in workers]
 | `XdYklN` | Keep lowest N dice |
 | `XdYdZ` | Chain: use sum of first roll as count for second |
 | `Xdf` | Fate/fudge dice; each die produces −1, 0, or 1 |
+| `XdYe` | Explode on max: re-roll and add for each die that hits Y |
+| `XdYeN` | Explode when raw result >= N |
+| `XdYe!` / `XdYeN!` | Cascade explode: exploded dice can also explode |
+| `XdYi` | Implode on min (1): re-roll and subtract |
+| `XdYiN` | Implode when raw result <= N |
+| `XdYeNiW` | Explode on N or higher **and** implode on W or lower |
+
+Explosion and implosion are evaluated on **kept** dice only (after `kh`/`kl`
+filtering). Discarded dice never trigger either mechanic. Implosion never
+cascades.
 
 ### Pool notation reference
 
@@ -106,6 +137,15 @@ results = [w.roll('3d6') for w in workers]
 | `NdStT` | Roll N dice, return count of results >= T |
 | `NdS+MtT` | Per-die modifier, then success threshold |
 | `N1dS+M+N2dS-MtT` | Compound pool with mixed per-die modifiers |
+| `NdSe` / `NdSeN` | Explode on max (or N): add a die to the pool |
+| `NdSe!` / `NdSeN!` | Cascade explode |
+| `NdSi` / `NdSiN` | Implode on min/N: each implode negates one success |
+| `NdSeNiW` | Explode on N or higher and implode on W or lower |
+
+Pool explosion and implosion are evaluated on **raw** (pre-modifier) die
+values. The success count from implosions is clamped at zero. The `tT`
+threshold token may appear before or after the per-subpool `e`/`i` spec
+(e.g. both `12d6et4` and `12d6t4e` are accepted).
 
 ## Algorithms
 
