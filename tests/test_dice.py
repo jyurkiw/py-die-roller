@@ -692,3 +692,84 @@ class TestDicePoolImplosion:
         result = d.pool('8d6i+4d6+1e5t4')
         assert isinstance(result, int)
         assert result >= 0
+
+
+class TestRollKeepAndExplode:
+    """Regression suite for the keep-then-explode interaction.
+
+    Defined behaviour: keep filtering (kh/kl) is applied *before* the
+    explosion/implosion check.  Only the *kept* dice are inspected for
+    explosion or implosion triggers; discarded dice never fire.
+    """
+
+    # --- explosion fires on the kept set, not the full roll ---
+
+    def test_keep_high_explosion_can_fire(self):
+        # 5d6kh3: without explosion max is 3*6 = 18.
+        # With explosion on the 3 kept dice, result can exceed 18.
+        d = Dice(seed=1)
+        results = [d.roll('5d6kh3e') for _ in range(500)]
+        assert max(results) > 18
+
+    def test_keep_low_explosion_never_fires_in_practice(self):
+        # 10d6kl1e: keep the single *lowest* die from 10d6, explode on 6.
+        # P(min of 10d6 = 6) = (1/6)^10 ≈ 1.7e-8 — never observed in 500 rolls.
+        # If explosion were triggered by *any* of the 10 dice this would fail.
+        d = Dice(seed=1)
+        results = [d.roll('10d6kle') for _ in range(500)]
+        assert max(results) <= 6
+
+    def test_keep_high_cascade_explosion_can_fire(self):
+        d = Dice(seed=1)
+        results = [d.roll('5d6kh3e!') for _ in range(500)]
+        assert max(results) > 18
+
+    # --- implosion fires on the kept set, not the full roll ---
+
+    def test_keep_low_implosion_can_fire(self):
+        # 5d6kl2i: keep the 2 *lowest* dice, implode on 1.
+        # Lowest dice frequently roll 1, so implosion will sometimes reduce the total.
+        d = Dice(seed=1)
+        results = [d.roll('5d6kl2i') for _ in range(500)]
+        assert min(results) < 2  # plain kl2 min is 2; implosion can push below
+
+    def test_keep_high_implosion_never_fires_in_practice(self):
+        # 10d6kh1i: keep the single *highest* die from 10d6, implode on 1.
+        # P(max of 10d6 = 1) = (1/6)^10 — never observed in 500 rolls.
+        d = Dice(seed=1)
+        results = [d.roll('10d6khi') for _ in range(500)]
+        assert min(results) >= 1
+
+    # --- combined keep + explode + implode ---
+
+    def test_keep_and_both_mechanics_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('5d6kh3e5i2') for _ in range(50)] == \
+               [b.roll('5d6kh3e5i2') for _ in range(50)]
+
+    # --- seeded regression pins ---
+
+    def test_keep_high_explosion_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('5d6kh3e') for _ in range(50)] == \
+               [b.roll('5d6kh3e') for _ in range(50)]
+
+    def test_keep_low_explosion_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('5d6kl2e') for _ in range(50)] == \
+               [b.roll('5d6kl2e') for _ in range(50)]
+
+    def test_keep_high_implosion_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('5d6kh3i') for _ in range(50)] == \
+               [b.roll('5d6kh3i') for _ in range(50)]
+
+    def test_keep_low_implosion_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('5d6kl2i') for _ in range(50)] == \
+               [b.roll('5d6kl2i') for _ in range(50)]
