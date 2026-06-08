@@ -8,6 +8,7 @@ Primary exports:
 """
 
 from .rng import RNG, ALGORITHMS
+from .dice import Dice
 
-__all__ = ["RNG", "ALGORITHMS"]
+__all__ = ["RNG", "ALGORITHMS", "Dice"]
 __version__ = "0.1.0"
