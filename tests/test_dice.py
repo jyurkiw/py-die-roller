@@ -2,7 +2,7 @@
 
 import pytest
 from dieroller import Dice
-from dieroller.dice import _parse, _apply_keep, _Segment
+from dieroller.dice import _parse, _apply_keep, _Segment, _parse_pool, _count_successes, _SubPool
 
 
 class TestDiceParse:
@@ -241,3 +241,144 @@ class TestDiceSpawn:
         b_children = b.spawn(4)
         for ac, bc in zip(a_children, b_children):
             assert ac.roll("3d6") == bc.roll("3d6")
+
+
+class TestParsePool:
+    def test_simple(self):
+        sub_pools, threshold = _parse_pool("12d6")
+        assert sub_pools == [_SubPool(count=12, sides=6, per_die_modifier=0)]
+        assert threshold is None
+
+    def test_with_threshold(self):
+        sub_pools, threshold = _parse_pool("4d6t4")
+        assert sub_pools == [_SubPool(count=4, sides=6, per_die_modifier=0)]
+        assert threshold == 4
+
+    def test_threshold_uppercase(self):
+        _, threshold = _parse_pool("4d6T4")
+        assert threshold == 4
+
+    def test_positive_per_die_modifier(self):
+        sub_pools, threshold = _parse_pool("12d6+1t4")
+        assert sub_pools == [_SubPool(count=12, sides=6, per_die_modifier=1)]
+        assert threshold == 4
+
+    def test_negative_per_die_modifier(self):
+        sub_pools, threshold = _parse_pool("4d10-1t5")
+        assert sub_pools == [_SubPool(count=4, sides=10, per_die_modifier=-1)]
+        assert threshold == 5
+
+    def test_compound_pool_second_has_modifier(self):
+        sub_pools, threshold = _parse_pool("8d6+4d6+1t4")
+        assert len(sub_pools) == 2
+        assert sub_pools[0] == _SubPool(count=8, sides=6, per_die_modifier=0)
+        assert sub_pools[1] == _SubPool(count=4, sides=6, per_die_modifier=1)
+        assert threshold == 4
+
+    def test_compound_pool_both_have_modifiers(self):
+        sub_pools, threshold = _parse_pool("8d10+2+4d10-1t5")
+        assert len(sub_pools) == 2
+        assert sub_pools[0] == _SubPool(count=8, sides=10, per_die_modifier=2)
+        assert sub_pools[1] == _SubPool(count=4, sides=10, per_die_modifier=-1)
+        assert threshold == 5
+
+    def test_compound_pool_no_threshold(self):
+        sub_pools, threshold = _parse_pool("8d6+4d6")
+        assert len(sub_pools) == 2
+        assert threshold is None
+
+    def test_no_expression_raises(self):
+        with pytest.raises(ValueError):
+            _parse_pool("notapool")
+
+    def test_no_expression_threshold_only_raises(self):
+        with pytest.raises(ValueError):
+            _parse_pool("t4")
+
+
+class TestCountSuccesses:
+    def test_mixed_results(self):
+        assert _count_successes([2, 4, 4, 6], threshold=4) == 3
+
+    def test_all_fail(self):
+        assert _count_successes([1, 2, 3], threshold=4) == 0
+
+    def test_all_succeed(self):
+        assert _count_successes([4, 5, 6], threshold=4) == 3
+
+    def test_empty_results(self):
+        assert _count_successes([], threshold=4) == 0
+
+    def test_exact_threshold_counts_as_success(self):
+        assert _count_successes([4, 4, 4], threshold=4) == 3
+
+    def test_one_below_threshold_excluded(self):
+        assert _count_successes([3, 4], threshold=4) == 1
+
+
+class TestDicePool:
+    def test_no_threshold_returns_list(self):
+        d = Dice(seed=1)
+        result = d.pool("12d6")
+        assert isinstance(result, list)
+
+    def test_list_length(self):
+        d = Dice(seed=1)
+        assert len(d.pool("12d6")) == 12
+
+    def test_list_element_range(self):
+        d = Dice(seed=1)
+        for _ in range(100):
+            for val in d.pool("4d6"):
+                assert 1 <= val <= 6
+
+    def test_threshold_returns_int(self):
+        d = Dice(seed=1)
+        result = d.pool("4d6t4")
+        assert isinstance(result, int)
+
+    def test_success_count_in_range(self):
+        d = Dice(seed=1)
+        for _ in range(200):
+            assert 0 <= d.pool("4d6t4") <= 4
+
+    def test_per_die_modifier_shifts_range(self):
+        d = Dice(seed=1)
+        for _ in range(200):
+            for val in d.pool("4d6+1"):
+                assert 2 <= val <= 7
+
+    def test_negative_per_die_modifier_shifts_range(self):
+        d = Dice(seed=1)
+        for _ in range(200):
+            for val in d.pool("4d6-1"):
+                assert 0 <= val <= 5
+
+    def test_compound_pool_total_length(self):
+        d = Dice(seed=1)
+        assert len(d.pool("8d6+4d6")) == 12
+
+    def test_compound_pool_success_count_in_range(self):
+        d = Dice(seed=1)
+        for _ in range(200):
+            assert 0 <= d.pool("8d6+4d6+1t4") <= 12
+
+    def test_compound_mixed_modifiers_success_range(self):
+        d = Dice(seed=1)
+        for _ in range(200):
+            assert 0 <= d.pool("8d10+2+4d10-1t5") <= 12
+
+    def test_seeded_reproducible_list(self):
+        a = Dice(seed=55)
+        b = Dice(seed=55)
+        assert [a.pool("4d6") for _ in range(20)] == [b.pool("4d6") for _ in range(20)]
+
+    def test_seeded_reproducible_successes(self):
+        a = Dice(seed=55)
+        b = Dice(seed=55)
+        assert [a.pool("4d6t4") for _ in range(20)] == [b.pool("4d6t4") for _ in range(20)]
+
+    def test_invalid_code_raises(self):
+        d = Dice(seed=1)
+        with pytest.raises(ValueError):
+            d.pool("notapool")
