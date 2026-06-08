@@ -55,6 +55,58 @@ workers = rng.spawn(8)
 results = [w.gen.random(1000) for w in workers]
 ```
 
+## Dice notation
+
+```python
+from dieroller import Dice
+
+d = Dice()           # seeded from OS entropy
+d = Dice(seed=42)    # reproducible
+
+# Roll notation — dice are summed
+d.roll('3d6')         # roll 3d6, return total
+d.roll('1d20+5')      # roll 1d20, add 5
+d.roll('4d6kh3')      # roll 4d6, keep highest 3
+d.roll('3d20kl+7')    # roll 3d20, keep lowest, add 7
+d.roll('4df+3')       # 4 fate dice (+3 modifier), result in [-1, 7]
+d.roll('4d3d12kh4+9') # chained: roll 4d3, use sum as count for d12kh4, add 9
+
+# Pool notation — individual die results are kept separately
+d.pool('12d6')              # list of 12 integers in [1, 6]
+d.pool('4d6+1')             # list of 4 integers in [2, 7] (per-die +1)
+
+# Pool with success threshold — returns a count of dice >= threshold
+d.pool('4d6t4')             # e.g. [2, 4, 4, 6] → 3 successes
+d.pool('12d6+1t4')          # per-die +1, then count results >= 4
+d.pool('8d6+4d6+1t4')       # compound: 8d6 plain + 4d6 with per-die +1
+d.pool('8d10+2+4d10-1t5')   # compound with mixed per-die modifiers
+
+# Spawn independent, non-overlapping streams (safe for parallel work)
+workers = d.spawn(8)
+results = [w.roll('3d6') for w in workers]
+```
+
+### Roll notation reference
+
+| Pattern | Meaning |
+|---|---|
+| `XdY` | Roll X dice with Y sides, sum all |
+| `XdY+Z` / `XdY-Z` | Roll and apply flat modifier |
+| `XdYkhN` | Keep highest N dice |
+| `XdYklN` | Keep lowest N dice |
+| `XdYdZ` | Chain: use sum of first roll as count for second |
+| `Xdf` | Fate/fudge dice; each die produces −1, 0, or 1 |
+
+### Pool notation reference
+
+| Pattern | Meaning |
+|---|---|
+| `NdS` | Roll N dice, return list of results |
+| `NdS+M` / `NdS-M` | Roll N dice, add/subtract M from each result |
+| `NdStT` | Roll N dice, return count of results >= T |
+| `NdS+MtT` | Per-die modifier, then success threshold |
+| `N1dS+M+N2dS-MtT` | Compound pool with mixed per-die modifiers |
+
 ## Algorithms
 
 | Name         | Period    | Notes                                  |
