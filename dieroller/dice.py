@@ -18,6 +18,13 @@ Supported roll notation (used with :meth:`Dice.roll`)::
     4d3d12kh4d7+9  — full chained example
     Xdf            — fate/fudge dice: each die produces -1, 0, or 1
     4df+3+2+2+2    — 4 fate dice with multiple stacked modifiers
+    XdYe           — explode on max: roll again and add when a die hits max
+    XdYeN          — explode when raw result >= N
+    XdYe!          — cascade explode: exploded dice can also explode
+    XdYeN!         — cascade explode on N or higher
+    XdYi           — implode on min (1): roll again and subtract
+    XdYiN          — implode when raw result <= N
+    XdYeNiW        — explode on N or higher and implode on W or lower
 
 Supported pool notation (used with :meth:`Dice.pool`)::
 
@@ -27,11 +34,16 @@ Supported pool notation (used with :meth:`Dice.pool`)::
     NdStT            — roll N dice, return count of results >= T
     NdS+MtT          — per-die modifier then success threshold
     N1dS+M+N2dS-MtT  — compound pool with mixed per-die modifiers and threshold
+    NdSetT           — explode on max; explosion checked on raw value before +M
+    NdSeNtT          — explode when raw result >= N
+    NdSe!tT          — cascade explode
+    NdSiNtT          — implode on N or lower; each implode negates one success
+    NdSeNiWtT        — explode and implode with explicit thresholds
 """
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 from .rng import RNG
 
@@ -40,13 +52,15 @@ from .rng import RNG
 # ---------------------------------------------------------------------------
 
 _LEADING_COUNT_RE = re.compile(r'^(\d+)')
-_SEGMENT_RE = re.compile(r'd(f|\d+)(k[hl]\d*)?', re.IGNORECASE)
+_SEGMENT_RE = re.compile(r'd(f|\d+)(k[hl]\d*)?(e\d*!?)?(i\d*)?', re.IGNORECASE)
 _ALL_MODIFIERS_RE = re.compile(r'[+-]\d+')
 
-_POOL_THRESHOLD_RE = re.compile(r't(\d+)$', re.IGNORECASE)
+# No $ anchor: threshold may appear before or after per-subpool e/i specs.
+# The tN token is spliced out of the code string before sub-pool parsing.
+_POOL_THRESHOLD_RE = re.compile(r't(\d+)', re.IGNORECASE)
 # Negative lookahead (?!d) prevents consuming the leading count of the next
 # sub-pool (e.g. "+4" in "+4d6") as a per-die modifier.
-_SUB_POOL_RE = re.compile(r'(\d+)d(\d+)([+-]\d+(?!d))?', re.IGNORECASE)
+_SUB_POOL_RE = re.compile(r'(\d+)d(\d+)([+-]\d+(?!d))?(e\d*!?)?(i\d*)?', re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -55,9 +69,12 @@ _SUB_POOL_RE = re.compile(r'(\d+)d(\d+)([+-]\d+(?!d))?', re.IGNORECASE)
 
 @dataclass
 class _Segment:
-    sides: int          # number of sides; ignored when fate=True
-    keep: Optional[str] = None  # e.g. 'kh', 'kh3', 'kl', 'kl2', or None
-    fate: bool = False  # True for fate/fudge dice (dF/df)
+    sides: int                        # number of sides; ignored when fate=True
+    keep: Optional[str] = None        # e.g. 'kh', 'kh3', 'kl', 'kl2', or None
+    fate: bool = False                # True for fate/fudge dice (dF/df)
+    explode: Optional[int] = None     # explosion threshold (>= triggers); None = off
+    explode_cascade: bool = False     # True when '!' suffix present
+    implode: Optional[int] = None     # implosion threshold (<= triggers); None = off
 
 
 @dataclass
@@ -72,6 +89,56 @@ class _SubPool:
 
     per_die_modifier: int = 0
     """Flat value added to every individual die result before success comparison."""
+
+    explode: Optional[int] = None
+    """Explosion threshold (raw value >= triggers); ``None`` means no explosion."""
+
+    explode_cascade: bool = False
+    """``True`` when the ``!`` cascade suffix is present."""
+
+    implode: Optional[int] = None
+    """Implosion threshold (raw value <= triggers); ``None`` means no implosion."""
+
+
+# ---------------------------------------------------------------------------
+# Shared explosion / implosion spec parser
+# ---------------------------------------------------------------------------
+
+def _parse_explode_implode(expl_raw: str, impl_raw: str, sides: int):
+    """
+    Convert raw explosion and implosion spec strings to threshold values.
+
+    Both arguments are expected to already be lower-cased.
+
+    :param expl_raw: Explosion spec, e.g. ``'e'``, ``'e5'``, ``'e!'``,
+        ``'e5!'``, or ``''`` (absent).
+    :type expl_raw: str
+    :param impl_raw: Implosion spec, e.g. ``'i'``, ``'i3'``, or ``''``
+        (absent).
+    :type impl_raw: str
+    :param sides: Number of die sides; used as the default explosion threshold
+        when no numeric suffix is given.
+    :type sides: int
+    :returns: A ``(explode_threshold, explode_cascade, implode_threshold)``
+        tuple. Each threshold is ``None`` when the mechanic is absent.
+    :rtype: tuple[int or None, bool, int or None]
+    """
+    if expl_raw:
+        body = expl_raw[1:]          # strip leading 'e'
+        cascade = body.endswith('!')
+        body = body.rstrip('!')
+        explode: Optional[int] = int(body) if body else sides
+    else:
+        explode = None
+        cascade = False
+
+    if impl_raw:
+        body = impl_raw[1:]          # strip leading 'i'
+        implode: Optional[int] = int(body) if body else 1
+    else:
+        implode = None
+
+    return explode, cascade, implode
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +184,18 @@ def _parse(code: str):
             if sides <= 0:
                 raise ValueError(f"Die sides must be positive, got {sides}")
         keep = (m.group(2) or '').lower() or None
-        segments.append(_Segment(sides=sides, keep=keep, fate=fate))
+
+        expl_raw = (m.group(3) or '').lower()
+        impl_raw = (m.group(4) or '').lower()
+        explode, explode_cascade, implode = _parse_explode_implode(expl_raw, impl_raw, sides)
+        if fate:
+            # fate dice range is too small to make explosion/implosion meaningful
+            explode = implode = None
+            explode_cascade = False
+
+        segments.append(_Segment(sides=sides, keep=keep, fate=fate,
+                                  explode=explode, explode_cascade=explode_cascade,
+                                  implode=implode))
         last_end = m.end()
 
     if not segments:
@@ -177,7 +255,7 @@ def _parse_pool(code: str):
     modifier otherwise.
 
     :param code: A pool notation string such as ``'12d6'``, ``'4d6t4'``,
-        ``'12d6+1t4'``, or ``'8d10+2+4d10-1t5'``.
+        ``'12d6+1t4'``, ``'8d10+2+4d10-1t5'``, or ``'12d6et4'``.
     :type code: str
     :returns: A ``(sub_pools, threshold)`` tuple where *sub_pools* is a list
         of :class:`_SubPool` instances and *threshold* is an ``int`` if a
@@ -188,12 +266,15 @@ def _parse_pool(code: str):
     """
     code = code.strip()
 
-    # Strip optional success threshold from the end before parsing dice
+    # Splice out the success threshold token (tN) wherever it appears.
+    # Using a mid-string splice (not just a prefix trim) lets "12d6t4e" and
+    # "12d6et4" both parse correctly: the tN is removed first, then the
+    # remaining "12d6e" is parsed for sub-pools with explosion specs.
     threshold = None
     m = _POOL_THRESHOLD_RE.search(code)
     if m:
         threshold = int(m.group(1))
-        code = code[:m.start()]
+        code = code[:m.start()] + code[m.end():]
 
     sub_pools = []
     for m in _SUB_POOL_RE.finditer(code):
@@ -202,7 +283,14 @@ def _parse_pool(code: str):
         if sides <= 0:
             raise ValueError(f"Die sides must be positive, got {sides}")
         per_die_mod = int(m.group(3)) if m.group(3) else 0
-        sub_pools.append(_SubPool(count=count, sides=sides, per_die_modifier=per_die_mod))
+
+        expl_raw = (m.group(4) or '').lower()
+        impl_raw = (m.group(5) or '').lower()
+        explode, explode_cascade, implode = _parse_explode_implode(expl_raw, impl_raw, sides)
+
+        sub_pools.append(_SubPool(count=count, sides=sides, per_die_modifier=per_die_mod,
+                                   explode=explode, explode_cascade=explode_cascade,
+                                   implode=implode))
 
     if not sub_pools:
         raise ValueError(f"No die pool expression found in '{code}'")
@@ -226,6 +314,99 @@ def _count_successes(results: List[int], threshold: int) -> int:
     :rtype: int
     """
     return sum(1 for r in results if r >= threshold)
+
+
+# ---------------------------------------------------------------------------
+# Explosion and implosion helpers
+# ---------------------------------------------------------------------------
+
+def _explode_roll(dice: List[int], sides: int, threshold: int,
+                  cascade: bool, rng: RNG) -> int:
+    """
+    Return the total of extra dice added to a :meth:`~Dice.roll` by explosion.
+
+    Each die in *dice* whose value is >= *threshold* triggers one extra roll.
+    When *cascade* is ``True``, any extra roll that also meets the threshold
+    triggers yet another roll; this repeats until no new explosions occur.
+
+    :param dice: Kept die results to inspect for explosions.
+    :param sides: Number of sides on the exploding die.
+    :param threshold: Minimum value (inclusive) that triggers an explosion.
+    :param cascade: Allow exploded dice to explode again.
+    :param rng: RNG instance to use for extra rolls.
+    :returns: Sum of all extra dice produced by explosions.
+    :rtype: int
+    """
+    to_explode = [r for r in dice if r >= threshold]
+    total = 0
+    while to_explode:
+        new_rolls = [rng.nextint(1, sides) for _ in to_explode]
+        total += sum(new_rolls)
+        to_explode = [r for r in new_rolls if r >= threshold] if cascade else []
+    return total
+
+
+def _implode_roll(dice: List[int], sides: int, threshold: int, rng: RNG) -> int:
+    """
+    Return the total of extra dice added to a :meth:`~Dice.roll` by implosion.
+
+    Each die in *dice* whose value is <= *threshold* triggers one extra roll;
+    that value is **subtracted** from the running total (the caller negates
+    the return value). Implosions never cascade.
+
+    :param dice: Kept die results to inspect for implosions.
+    :param sides: Number of sides on the imploding die.
+    :param threshold: Maximum value (inclusive) that triggers an implosion.
+    :param rng: RNG instance to use for extra rolls.
+    :returns: Sum of extra dice from implosions (caller should subtract).
+    :rtype: int
+    """
+    imploding = [r for r in dice if r <= threshold]
+    if not imploding:
+        return 0
+    return sum(rng.nextint(1, sides) for _ in imploding)
+
+
+def _explode_pool(dice: List[int], sides: int, threshold: int,
+                  cascade: bool, rng: RNG) -> List[int]:
+    """
+    Return additional raw die values added to a pool by explosion.
+
+    Each die in *dice* whose **raw** (pre-modifier) value is >= *threshold*
+    adds one extra die to the pool. When *cascade* is ``True``, extra dice
+    that also meet the threshold add yet more dice.
+
+    :param dice: Raw (pre-modifier) die values to check for explosions.
+    :param sides: Number of sides on the exploding die.
+    :param threshold: Minimum raw value (inclusive) that triggers an explosion.
+    :param cascade: Allow exploded dice to themselves explode.
+    :param rng: RNG instance to use for extra rolls.
+    :returns: Raw values of the additional dice generated by explosions.
+    :rtype: list[int]
+    """
+    extra: List[int] = []
+    to_explode = [r for r in dice if r >= threshold]
+    while to_explode:
+        new_rolls = [rng.nextint(1, sides) for _ in to_explode]
+        extra.extend(new_rolls)
+        to_explode = [r for r in new_rolls if r >= threshold] if cascade else []
+    return extra
+
+
+def _pool_implosion_count(dice: List[int], threshold: int) -> int:
+    """
+    Return the count of dice whose raw value triggers an implosion.
+
+    Each imploded die negates one success when a success threshold is applied.
+    Implosion is evaluated on **raw** (pre-modifier) values; implosions never
+    cascade.
+
+    :param dice: Raw (pre-modifier) die values to check for implosions.
+    :param threshold: Maximum raw value (inclusive) that triggers an implosion.
+    :returns: Number of dice whose value is <= *threshold*.
+    :rtype: int
+    """
+    return sum(1 for r in dice if r <= threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +448,19 @@ class Dice:
         d.pool('8d6+4d6+1t4')      # compound pool: 8d6 plain + 4d6 with +1
         d.pool('8d10+2+4d10-1t5')  # compound pool with mixed per-die modifiers
 
+        # Exploding / imploding rolls
+        d.roll('3d6e')             # explode on 6; result can exceed 18
+        d.roll('3d6e5')            # explode on 5 or higher
+        d.roll('3d6e!')            # cascade explode: exploded dice can re-explode
+        d.roll('3d6i')             # implode on 1; re-roll and subtract
+        d.roll('3d6e5i2')          # explode on 5+, implode on 1-2
+
+        # Exploding / imploding pools
+        d.pool('12d6e')            # explode on 6; pool may grow beyond 12
+        d.pool('12d6t4e')          # explode on 6, count successes >= 4
+        d.pool('4d6t3i')           # implode on 1; each implode negates a success
+        d.pool('8d6e+4d6+1e5t4')   # compound: each group has its own threshold
+
         # Parallel independent streams
         workers = d.spawn(8)
         results = [w.roll('3d6') for w in workers]
@@ -285,8 +479,14 @@ class Dice:
 
         Fate/fudge dice (``df``) each produce -1, 0, or 1 with equal probability.
 
+        Explosion (``eN``) re-rolls and **adds** for each kept die >= N. Implosion
+        (``iN``) re-rolls and **subtracts** for each kept die <= N. Cascade
+        explosion (``eN!``) repeats until no new explosions occur. Implosions
+        never cascade. Both are evaluated on the kept values before any flat
+        modifier and do not apply to fate dice.
+
         :param code: A dice notation string such as ``'5d6kh3+2'``,
-            ``'4d3d12kh4d7+9'``, or ``'4df+3+2+2+2'``.
+            ``'3d6e!'``, ``'4d3d12kh4d7+9'``, or ``'4df+3+2+2+2'``.
         :type code: str
         :returns: The total result of the roll.
         :rtype: int
@@ -300,27 +500,54 @@ class Dice:
             else:
                 rolls = [self._rng.nextint(1, seg.sides) for _ in range(count)]
             kept = _apply_keep(rolls, seg.keep)
-            count = sum(kept)
+
+            extra = 0
+            if not seg.fate:
+                if seg.explode is not None:
+                    extra += _explode_roll(kept, seg.sides, seg.explode,
+                                           seg.explode_cascade, self._rng)
+                if seg.implode is not None:
+                    extra -= _implode_roll(kept, seg.sides, seg.implode, self._rng)
+
+            count = sum(kept) + extra
         return count + modifier
 
-    def _roll_sub_pool(self, sub_pool: _SubPool) -> List[int]:
+    def _roll_sub_pool(self, sub_pool: _SubPool) -> Tuple[List[int], int]:
         """
-        Roll the dice in a single :class:`_SubPool` and return individual results.
+        Roll the dice in a single :class:`_SubPool` and return results plus
+        the implosion count.
 
-        Each die is rolled uniformly on ``[1, sub_pool.sides]`` and then
-        ``sub_pool.per_die_modifier`` is added. No clamping is applied, so
-        results may fall outside the native die range when a modifier is present.
+        The sequence is:
+
+        1. Roll *sub_pool.count* dice, producing **raw** values in
+           ``[1, sub_pool.sides]``.
+        2. If explosion is configured, append extra raw dice for each raw
+           value >= the explosion threshold (cascading when requested).
+        3. Count imploding dice: raw values <= the implosion threshold.
+        4. Apply *sub_pool.per_die_modifier* to every raw value.
+
+        Explosion and implosion are both evaluated on the raw values **before**
+        the per-die modifier is applied.
 
         :param sub_pool: The sub-pool descriptor to roll.
         :type sub_pool: _SubPool
-        :returns: A list of *sub_pool.count* integers, each being the raw die
-            value plus *sub_pool.per_die_modifier*.
-        :rtype: list[int]
+        :returns: A ``(results, implosion_count)`` tuple. *results* is the
+            list of modified die values; *implosion_count* is the number of
+            dice whose raw value triggered an implosion.
+        :rtype: tuple[list[int], int]
         """
-        return [
-            self._rng.nextint(1, sub_pool.sides) + sub_pool.per_die_modifier
-            for _ in range(sub_pool.count)
-        ]
+        raw = [self._rng.nextint(1, sub_pool.sides) for _ in range(sub_pool.count)]
+
+        if sub_pool.explode is not None:
+            raw = raw + _explode_pool(raw, sub_pool.sides, sub_pool.explode,
+                                      sub_pool.explode_cascade, self._rng)
+
+        imp_count = (
+            _pool_implosion_count(raw, sub_pool.implode)
+            if sub_pool.implode is not None else 0
+        )
+
+        return [r + sub_pool.per_die_modifier for r in raw], imp_count
 
     def pool(self, code: str) -> Union[List[int], int]:
         """
@@ -332,7 +559,17 @@ class Dice:
         suffix) triggers success counting instead of returning the raw list.
 
         Compound pools (e.g. ``'8d6+4d6+1t4'``) are formed by concatenating
-        sub-pools; each sub-pool may carry its own per-die modifier.
+        sub-pools; each sub-pool may carry its own per-die modifier, explosion
+        spec, and implosion spec.
+
+        Explosion (``eN``) adds an extra die to the pool for each raw result
+        >= N. Cascade explosion (``eN!``) repeats until no new explosions occur.
+        Implosion (``iN``) negates one success per die whose raw result <= N.
+        Both are evaluated before the per-die modifier is applied; implosions
+        never cascade.
+
+        When a threshold is present the success count is clamped at zero
+        (implosions cannot produce a negative result).
 
         Supported notation::
 
@@ -341,22 +578,30 @@ class Dice:
             NdS-M            — subtract M from each result
             NdStT            — roll N dice, return count of results >= T
             NdS+MtT          — per-die modifier, then success threshold
+            NdSetT           — explode on max, count successes
+            NdSeNtT          — explode when raw result >= N
+            NdSe!tT          — cascade explode
+            NdSiNtT          — implode on N; each implode negates a success
             N1dS+M+N2dS-MtT  — compound pool with mixed modifiers
 
         :param code: A pool notation string.
         :type code: str
         :returns: A ``list[int]`` of individual die results when no threshold
-            is given, or an ``int`` success count when a threshold is present.
+            is given, or an ``int`` success count (>= 0) when a threshold is
+            present.
         :rtype: list[int] or int
         :raises ValueError: If *code* cannot be parsed.
         """
         sub_pools, threshold = _parse_pool(code)
         results: List[int] = []
+        total_implosions = 0
         for sp in sub_pools:
-            results.extend(self._roll_sub_pool(sp))
+            sp_results, imp_count = self._roll_sub_pool(sp)
+            results.extend(sp_results)
+            total_implosions += imp_count
         if threshold is None:
             return results
-        return _count_successes(results, threshold)
+        return max(0, _count_successes(results, threshold) - total_implosions)
 
     def spawn(self, n: int) -> "List[Dice]":
         """

@@ -2,7 +2,11 @@
 
 import pytest
 from dieroller import Dice
-from dieroller.dice import _parse, _apply_keep, _Segment, _parse_pool, _count_successes, _SubPool
+from dieroller.dice import (
+    _parse, _apply_keep, _Segment,
+    _parse_pool, _count_successes, _SubPool,
+    _parse_explode_implode,
+)
 
 
 class TestDiceParse:
@@ -382,3 +386,309 @@ class TestDicePool:
         d = Dice(seed=1)
         with pytest.raises(ValueError):
             d.pool("notapool")
+
+
+class TestParseExplodeImplode:
+    def test_no_specs(self):
+        explode, cascade, implode = _parse_explode_implode('', '', 6)
+        assert explode is None
+        assert cascade is False
+        assert implode is None
+
+    def test_explode_defaults_to_sides(self):
+        explode, cascade, implode = _parse_explode_implode('e', '', 6)
+        assert explode == 6
+        assert cascade is False
+
+    def test_explode_explicit_threshold(self):
+        explode, _, _ = _parse_explode_implode('e5', '', 6)
+        assert explode == 5
+
+    def test_explode_cascade(self):
+        _, cascade, _ = _parse_explode_implode('e!', '', 6)
+        assert cascade is True
+
+    def test_explode_explicit_threshold_cascade(self):
+        explode, cascade, _ = _parse_explode_implode('e5!', '', 6)
+        assert explode == 5
+        assert cascade is True
+
+    def test_implode_defaults_to_one(self):
+        _, _, implode = _parse_explode_implode('', 'i', 6)
+        assert implode == 1
+
+    def test_implode_explicit_threshold(self):
+        _, _, implode = _parse_explode_implode('', 'i3', 6)
+        assert implode == 3
+
+    def test_both_present(self):
+        explode, cascade, implode = _parse_explode_implode('e5!', 'i2', 10)
+        assert explode == 5
+        assert cascade is True
+        assert implode == 2
+
+
+class TestSegmentParseExplodeImplode:
+    """Verify _parse wires explosion/implosion into _Segment correctly."""
+
+    def test_explode_on_max(self):
+        segs, _, _ = _parse('3d6e')
+        assert segs[0].explode == 6
+        assert segs[0].explode_cascade is False
+
+    def test_explode_explicit(self):
+        segs, _, _ = _parse('3d6e5')
+        assert segs[0].explode == 5
+
+    def test_explode_cascade(self):
+        segs, _, _ = _parse('3d6e!')
+        assert segs[0].explode == 6
+        assert segs[0].explode_cascade is True
+
+    def test_explode_explicit_cascade(self):
+        segs, _, _ = _parse('3d8e7!')
+        assert segs[0].explode == 7
+        assert segs[0].explode_cascade is True
+
+    def test_implode_on_min(self):
+        segs, _, _ = _parse('3d6i')
+        assert segs[0].implode == 1
+
+    def test_implode_explicit(self):
+        segs, _, _ = _parse('3d6i2')
+        assert segs[0].implode == 2
+
+    def test_explode_and_implode(self):
+        segs, _, _ = _parse('3d6e5i2')
+        assert segs[0].explode == 5
+        assert segs[0].implode == 2
+
+    def test_fate_dice_no_explode(self):
+        segs, _, _ = _parse('4dfe')
+        assert segs[0].explode is None
+        assert segs[0].implode is None
+
+    def test_modifier_still_parsed_after_explode(self):
+        _, _, mod = _parse('3d6e+4')
+        assert mod == 4
+
+    def test_keep_and_explode(self):
+        segs, _, _ = _parse('5d6kh3e')
+        assert segs[0].keep == 'kh3'
+        assert segs[0].explode == 6
+
+    def test_chained_segments_independent_specs(self):
+        segs, _, _ = _parse('4d6e!+3d8e7!')
+        assert segs[0].explode == 6 and segs[0].explode_cascade is True
+        assert segs[1].explode == 7 and segs[1].explode_cascade is True
+
+
+class TestSubPoolParseExplodeImplode:
+    """Verify _parse_pool wires explosion/implosion into _SubPool correctly."""
+
+    def test_explode_on_max(self):
+        sps, _ = _parse_pool('4d6e')
+        assert sps[0].explode == 6
+        assert sps[0].explode_cascade is False
+
+    def test_explode_explicit(self):
+        sps, _ = _parse_pool('4d10e8')
+        assert sps[0].explode == 8
+
+    def test_explode_cascade(self):
+        sps, _ = _parse_pool('4d6e!')
+        assert sps[0].explode_cascade is True
+
+    def test_implode_on_min(self):
+        sps, _ = _parse_pool('4d6i')
+        assert sps[0].implode == 1
+
+    def test_implode_explicit(self):
+        sps, _ = _parse_pool('4d6i2')
+        assert sps[0].implode == 2
+
+    def test_threshold_before_explode_notation(self):
+        # User-friendly ordering: tN then e (threshold spliced out first)
+        sps, threshold = _parse_pool('12d6t4e')
+        assert threshold == 4
+        assert sps[0].explode == 6
+
+    def test_threshold_after_explode_notation(self):
+        # Preferred ordering: e then tN
+        sps, threshold = _parse_pool('12d6et4')
+        assert threshold == 4
+        assert sps[0].explode == 6
+
+    def test_compound_independent_explosion_specs(self):
+        sps, threshold = _parse_pool('8d6e+4d6+1e5t4')
+        assert sps[0].explode == 6
+        assert sps[0].per_die_modifier == 0
+        assert sps[1].explode == 5
+        assert sps[1].per_die_modifier == 1
+        assert threshold == 4
+
+    def test_per_die_modifier_and_implode(self):
+        sps, _ = _parse_pool('6d10+2i')
+        assert sps[0].per_die_modifier == 2
+        assert sps[0].implode == 1
+
+
+class TestRollExplosion:
+    def test_explode_can_exceed_max(self):
+        d = Dice(seed=1)
+        results = [d.roll('1d6e') for _ in range(500)]
+        assert max(results) > 6
+
+    def test_explode_explicit_threshold_can_exceed(self):
+        d = Dice(seed=1)
+        results = [d.roll('1d6e5') for _ in range(500)]
+        assert max(results) > 6
+
+    def test_no_explode_never_exceeds_max(self):
+        d = Dice(seed=1)
+        for _ in range(500):
+            assert d.roll('1d6') <= 6
+
+    def test_cascade_produces_higher_max_than_single(self):
+        # Cascade can stack unboundedly; single explode adds at most one die.
+        # With enough rolls the cascade version should sometimes exceed 12.
+        d = Dice(seed=2)
+        results = [d.roll('1d6e!') for _ in range(1000)]
+        assert max(results) > 12
+
+    def test_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('3d6e') for _ in range(50)] == [b.roll('3d6e') for _ in range(50)]
+
+    def test_cascade_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('3d6e!') for _ in range(50)] == [b.roll('3d6e!') for _ in range(50)]
+
+    def test_modifier_applied_after_explosion(self):
+        a = Dice(seed=7)
+        b = Dice(seed=7)
+        with_mod = a.roll('3d6e+5')
+        without_mod = b.roll('3d6e')
+        assert with_mod == without_mod + 5
+
+
+class TestRollImplosion:
+    def test_implode_can_go_below_min(self):
+        d = Dice(seed=1)
+        results = [d.roll('1d6i') for _ in range(500)]
+        assert min(results) < 1
+
+    def test_implode_explicit_threshold(self):
+        d = Dice(seed=1)
+        # implode on 1 or 2 — more implosions, should occasionally give <= 0
+        results = [d.roll('1d6i2') for _ in range(500)]
+        assert min(results) < 1
+
+    def test_no_implode_always_at_least_one(self):
+        d = Dice(seed=1)
+        for _ in range(500):
+            assert d.roll('1d6') >= 1
+
+    def test_seeded_reproducible(self):
+        a = Dice(seed=42)
+        b = Dice(seed=42)
+        assert [a.roll('3d6i') for _ in range(50)] == [b.roll('3d6i') for _ in range(50)]
+
+    def test_explode_and_implode_together(self):
+        a = Dice(seed=13)
+        b = Dice(seed=13)
+        assert [a.roll('3d6e5i2') for _ in range(50)] == [b.roll('3d6e5i2') for _ in range(50)]
+
+
+class TestDicePoolExplosion:
+    def test_explode_can_grow_pool(self):
+        d = Dice(seed=1)
+        max_len = max(len(d.pool('4d6e')) for _ in range(500))
+        assert max_len > 4
+
+    def test_explode_explicit_threshold_grows_more(self):
+        # Exploding on 5+ triggers more often than 6+
+        d = Dice(seed=1)
+        results_e5 = [len(d.pool('4d6e5')) for _ in range(300)]
+        d2 = Dice(seed=1)
+        results_e6 = [len(d2.pool('4d6e')) for _ in range(300)]
+        assert sum(results_e5) >= sum(results_e6)
+
+    def test_cascade_can_grow_further(self):
+        d = Dice(seed=2)
+        max_len = max(len(d.pool('4d6e!')) for _ in range(500))
+        assert max_len > 5
+
+    def test_no_explode_pool_size_fixed(self):
+        d = Dice(seed=1)
+        for _ in range(200):
+            assert len(d.pool('4d6')) == 4
+
+    def test_explode_with_threshold_returns_int(self):
+        d = Dice(seed=1)
+        assert isinstance(d.pool('4d6t4e'), int)
+
+    def test_explode_success_count_can_exceed_initial_count(self):
+        # Pool of 4d6 exploding on 6; successes >= 4. With many trials
+        # and explosions, count > 4 should eventually occur.
+        d = Dice(seed=3)
+        counts = [d.pool('4d6t4e') for _ in range(500)]
+        assert max(counts) > 4
+
+    def test_seeded_reproducible(self):
+        a = Dice(seed=55)
+        b = Dice(seed=55)
+        assert [a.pool('4d6e') for _ in range(20)] == [b.pool('4d6e') for _ in range(20)]
+
+    def test_seeded_reproducible_with_threshold(self):
+        a = Dice(seed=55)
+        b = Dice(seed=55)
+        assert [a.pool('4d6t4e') for _ in range(20)] == [b.pool('4d6t4e') for _ in range(20)]
+
+    def test_compound_independent_explosion_thresholds(self):
+        d = Dice(seed=1)
+        result = d.pool('8d6e+4d6+1e5t4')
+        assert isinstance(result, int)
+        assert result >= 0
+
+
+class TestDicePoolImplosion:
+    def test_implode_reduces_successes(self):
+        # Same seed: with implosion, success count should sometimes be lower
+        d1 = Dice(seed=1)
+        d2 = Dice(seed=1)
+        no_impl = [d1.pool('4d6t3') for _ in range(200)]
+        with_impl = [d2.pool('4d6it3') for _ in range(200)]
+        assert any(a > b for a, b in zip(no_impl, with_impl))
+
+    def test_implode_count_never_below_zero(self):
+        d = Dice(seed=1)
+        for _ in range(500):
+            result = d.pool('4d6it3')
+            assert result >= 0
+
+    def test_implode_explicit_threshold(self):
+        d = Dice(seed=1)
+        result = d.pool('4d6i2t4')
+        assert isinstance(result, int)
+        assert result >= 0
+
+    def test_implode_no_threshold_returns_list(self):
+        # Without a threshold there are no successes to negate; raw list returned
+        d = Dice(seed=1)
+        result = d.pool('4d6i')
+        assert isinstance(result, list)
+        assert len(result) == 4
+
+    def test_seeded_reproducible(self):
+        a = Dice(seed=77)
+        b = Dice(seed=77)
+        assert [a.pool('4d6it4') for _ in range(20)] == [b.pool('4d6it4') for _ in range(20)]
+
+    def test_compound_pool_with_implosion(self):
+        d = Dice(seed=1)
+        result = d.pool('8d6i+4d6+1e5t4')
+        assert isinstance(result, int)
+        assert result >= 0
