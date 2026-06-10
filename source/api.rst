@@ -10,3 +10,8 @@ API Reference
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: dieroller.table
+   :members:
+   :undoc-members:
+   :show-inheritance:

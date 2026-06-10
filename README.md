@@ -147,6 +147,94 @@ values. The success count from implosions is clamped at zero. The `tT`
 threshold token may appear before or after the per-subpool `e`/`i` spec
 (e.g. both `12d6et4` and `12d6t4e` are accepted).
 
+## Tables
+
+```python
+import dieroller
+
+# --- Flat table ---
+t = dieroller.table()
+t.add("Goblin", "Orc", "Troll", "Dragon", "Basilisk", "Wyvern")
+
+print(t)
+# 1. Goblin
+# 2. Orc
+# 3. Troll
+# 4. Dragon
+# 5. Basilisk
+# 6. Wyvern
+
+t.size         # 6
+t.roll()       # uniform random entry from all 6
+
+# --- Sub-range rolling ---
+# Pass any dice notation; result is clamped to [1, size]
+t.roll("1d6")      # equivalent to t.roll() — full range
+t.roll("1d3+2")    # 1d3 + 2 → result in [3, 5]; only entries 3–5 selected
+t.roll("1d4+2")    # result in [3, 6] — upper four entries only
+
+# --- Nested / sub-tables ---
+monsters = dieroller.table()
+undead = dieroller.table()
+undead.add("Skeleton", "Zombie", "Wight")
+
+monsters.add("Goblin", undead, "Dragon")
+
+print(monsters)
+# 1. Goblin
+# 2. [sub-table]
+#      1. Skeleton
+#      2. Zombie
+#      3. Wight
+# 3. Dragon
+
+monsters.roll()   # "Goblin", "Skeleton", "Zombie", "Wight", or "Dragon"
+                  # sub-tables are rolled recursively until a plain value is reached
+
+# Nesting can be arbitrarily deep
+outer = dieroller.table()
+mid   = dieroller.table()
+inner = dieroller.table()
+inner.add("Ancient Red Dragon", "Tarrasque")
+mid.add("Vampire", inner)
+outer.add("Goblin", mid)
+outer.roll()   # may return "Goblin", "Vampire", "Ancient Red Dragon", or "Tarrasque"
+
+# --- Subclassed table ---
+class MonsterTable(dieroller.table):
+    """A specialised encounter table — inherits all behaviour as-is."""
+    pass
+
+mt = MonsterTable()
+mt.add("Rat", "Wolf", "Bear", "Troll")
+mt.roll()          # uniform random entry
+mt.roll("1d4")     # same, explicitly driven by 1d4
+
+# --- Subclassed table with _roll for sub-range rolling ---
+# Override _roll to constrain which indices the table ever produces.
+# roll() calls _roll() when no dice code is supplied.
+class UpperHalfTable(dieroller.table):
+    """Rolls only the upper half of the table (high-difficulty entries)."""
+    def _roll(self):
+        mid = self.size // 2 + 1
+        return self._dice._rng.nextint(mid, self.size)
+
+boss = UpperHalfTable(seed=42)
+boss.add("Kobold", "Goblin", "Troll", "Dragon", "Tarrasque", "Balor")
+boss.roll()   # always one of: "Troll", "Dragon", "Tarrasque", "Balor"
+
+# Use dice notation inside _roll for readable sub-range definitions
+class TreasureTable(dieroller.table):
+    """Rolls 1d3+3 so only entries 4–6 are ever selected via _roll()."""
+    def _roll(self):
+        return self._dice.roll("1d3+3")
+
+treasure = TreasureTable()
+treasure.add("Copper", "Silver", "Gold", "Gem", "Artifact", "Legendary")
+treasure.roll()         # always "Gem", "Artifact", or "Legendary"
+treasure.roll("1d3")    # explicit code overrides _roll — entries 1–3 only
+```
+
 ## Algorithms
 
 | Name         | Period    | Notes                                  |
