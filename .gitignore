@@ -27,3 +27,21 @@ htmlcov/
 .vscode/
 .idea/
 *.iml
+
+# Sphinx documentation
+build/
+dist/
+.ipynb_checkpoints
+.DS_Store
+.env
+.env.local
+.env.*.local
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints
+.DS_Store
+.env
+.env.local
+.env.*.local
+source/_*

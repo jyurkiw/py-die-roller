@@ -17,3 +17,19 @@ extended = ["randomgen>=1.23.0"]
 
 [project.urls]
 Homepage = "https://github.com/jyurkiw/py-die-roller"
+
+[tool.setuptools.packages.find]
+include = [
+    "dieroller",
+    "tests"
+]
+exclude = [
+    "source",
+    "build"
+]
+
+[dependency-groups]
+dev = [
+    "sphinx>=7.1.2",
+    "sphinx-markdown-builder>=0.6.10",
+]
