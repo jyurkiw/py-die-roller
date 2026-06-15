@@ -167,6 +167,18 @@ print(t)
 t.size         # 6
 t.roll()       # uniform random entry from all 6
 
+# --- Weighted entries ---
+# add_weighted(item, weight) inserts the item weight times.
+# A weight of N makes an entry N times as likely as weight-1 entries.
+loot = dieroller.table()
+loot.add_weighted("Gold coin",  5)   # slots 1–5  (common)
+loot.add_weighted("Gem",        3)   # slots 6–8  (uncommon)
+loot.add_weighted("Artifact",   1)   # slot  9    (rare)
+
+# Equivalent — add_weighted("X", 3) is the same as add("X", "X", "X")
+loot.size   # 9
+loot.roll() # ~55% Gold coin, ~33% Gem, ~11% Artifact
+
 # --- Sub-range rolling ---
 # Pass any dice notation; result is clamped to [1, size]
 t.roll("1d6")      # equivalent to t.roll() — full range
