@@ -167,18 +167,6 @@ print(t)
 t.size         # 6
 t.roll()       # uniform random entry from all 6
 
-# --- Weighted entries ---
-# add_weighted(item, weight) inserts the item weight times.
-# A weight of N makes an entry N times as likely as weight-1 entries.
-loot = dieroller.table()
-loot.add_weighted("Gold coin",  5)   # slots 1–5  (common)
-loot.add_weighted("Gem",        3)   # slots 6–8  (uncommon)
-loot.add_weighted("Artifact",   1)   # slot  9    (rare)
-
-# Equivalent — add_weighted("X", 3) is the same as add("X", "X", "X")
-loot.size   # 9
-loot.roll() # ~55% Gold coin, ~33% Gem, ~11% Artifact
-
 # --- Sub-range rolling ---
 # Pass any dice notation; result is clamped to [1, size]
 t.roll("1d6")      # equivalent to t.roll() — full range
@@ -245,6 +233,47 @@ treasure = TreasureTable()
 treasure.add("Copper", "Silver", "Gold", "Gem", "Artifact", "Legendary")
 treasure.roll()         # always "Gem", "Artifact", or "Legendary"
 treasure.roll("1d3")    # explicit code overrides _roll — entries 1–3 only
+```
+
+### Weighted entries
+
+`add_weighted(item, weight)` inserts an entry `weight` times so it occupies
+that many consecutive index slots.  A weight of N makes the entry N times as
+likely as a weight-1 entry on a uniform roll.  It is exactly equivalent to
+calling `add(item)` N times.
+
+```python
+import dieroller
+
+loot = dieroller.table(seed=42)
+loot.add_weighted("Gold coin", 5)   # 5 slots — common
+loot.add_weighted("Gem",       3)   # 3 slots — uncommon
+loot.add_weighted("Artifact",  1)   # 1 slot  — rare
+
+loot.size    # 9  (5 + 3 + 1)
+loot.roll()  # random entry
+
+# The three lines above are exactly equivalent to:
+loot2 = dieroller.table(seed=42)
+loot2.add("Gold coin", "Gold coin", "Gold coin", "Gold coin", "Gold coin",
+          "Gem", "Gem", "Gem",
+          "Artifact")
+```
+
+| Entry       | Weight | Slots | Approx. frequency |
+|-------------|--------|-------|-------------------|
+| Gold coin   | 5      | 1–5   | ~56%              |
+| Gem         | 3      | 6–8   | ~33%              |
+| Artifact    | 1      | 9     | ~11%              |
+
+Mix `add` and `add_weighted` freely — they both append to the same list:
+
+```python
+t = dieroller.table()
+t.add("nothing")            # weight 1
+t.add_weighted("silver", 3) # weight 3 — 3× as likely as "nothing"
+t.add_weighted("gold",   1) # weight 1 — same probability as "nothing"
+t.size   # 5
 ```
 
 ## Algorithms
