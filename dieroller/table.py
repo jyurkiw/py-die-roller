@@ -83,6 +83,39 @@ class table:
         for v in values:
             self._entries.append(v)
 
+    def add_weighted(self, value, weight: int):
+        """
+        Append *value* to the table *weight* times.
+
+        This is exactly equivalent to calling ``add(value, value, …)`` *weight*
+        times.  Because the table is index-based, a weight of N means the entry
+        occupies N consecutive slots and is therefore N times as likely to be
+        selected by a uniform roll as an entry with weight 1.
+
+        Weights must be positive integers.
+
+        :param value: The entry to append.  May be any object, including a
+            nested :class:`table`.
+        :param weight: Number of times to insert *value*.  Must be a positive
+            integer (``>= 1``).
+        :type weight: int
+        :raises ValueError: If *weight* is not a positive integer.
+
+        Example::
+
+            t = table()
+            t.add_weighted('Common',    3)  # slots 1–3
+            t.add_weighted('Uncommon',  2)  # slots 4–5
+            t.add_weighted('Rare',      1)  # slot  6
+
+            # Equivalent to:
+            t.add('Common', 'Common', 'Common', 'Uncommon', 'Uncommon', 'Rare')
+        """
+        if not isinstance(weight, int) or isinstance(weight, bool) or weight < 1:
+            raise ValueError(f"weight must be a positive integer, got {weight!r}")
+        for _ in range(weight):
+            self._entries.append(value)
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------

@@ -88,6 +88,88 @@ class TestTableRoll:
         assert seen == {"a", "b", "c", "d"}
 
 
+class TestTableWeighted:
+    def test_weight_1_same_as_add(self):
+        t1 = table()
+        t1.add("orc")
+        t2 = table()
+        t2.add_weighted("orc", 1)
+        assert t1.size == t2.size == 1
+
+    def test_weight_3_same_as_add_three_times(self):
+        # add_weighted("orc", 3) is identical to add("orc", "orc", "orc")
+        t1 = table()
+        t1.add("orc", "orc", "orc")
+        t2 = table()
+        t2.add_weighted("orc", 3)
+        assert t1.size == t2.size == 3
+
+    def test_size_reflects_weight(self):
+        t = table()
+        t.add_weighted("common", 3)
+        t.add_weighted("rare", 1)
+        assert t.size == 4
+
+    def test_weighted_entry_occupies_expected_slots(self):
+        # With weight 3 out of 4 total slots, "common" should appear ~75% of rolls
+        t = table(seed=0)
+        t.add_weighted("common", 3)
+        t.add_weighted("rare", 1)
+        results = [t.roll() for _ in range(400)]
+        assert all(r in ("common", "rare") for r in results)
+        common_count = results.count("common")
+        # Expect ~75%; allow generous tolerance
+        assert 250 < common_count < 350
+
+    def test_weighted_proportions_match_weights(self):
+        # Verify relative frequencies match weights across multiple tiers
+        t = table(seed=1)
+        t.add_weighted("common",   6)
+        t.add_weighted("uncommon", 3)
+        t.add_weighted("rare",     1)
+        results = [t.roll() for _ in range(1000)]
+        common   = results.count("common")
+        uncommon = results.count("uncommon")
+        rare     = results.count("rare")
+        assert common > uncommon > rare
+
+    def test_add_weighted_with_subtable(self):
+        sub = table(seed=0)
+        sub.add("dragon", "wyvern")
+        t = table(seed=0)
+        t.add_weighted(sub, 2)
+        t.add_weighted("goblin", 1)
+        assert t.size == 3
+        for _ in range(50):
+            assert t.roll() in ("dragon", "wyvern", "goblin")
+
+    def test_zero_weight_raises(self):
+        t = table()
+        with pytest.raises(ValueError):
+            t.add_weighted("orc", 0)
+
+    def test_negative_weight_raises(self):
+        t = table()
+        with pytest.raises(ValueError):
+            t.add_weighted("orc", -1)
+
+    def test_float_weight_raises(self):
+        t = table()
+        with pytest.raises(ValueError):
+            t.add_weighted("orc", 1.5)
+
+    def test_bool_weight_raises(self):
+        # bool is a subclass of int; True == 1 but should be rejected
+        t = table()
+        with pytest.raises(ValueError):
+            t.add_weighted("orc", True)
+
+    def test_string_weight_raises(self):
+        t = table()
+        with pytest.raises(ValueError):
+            t.add_weighted("orc", "3")
+
+
 class TestTableSubRangeRoll:
     def test_subrange_restricts_entries(self):
         # 1d3+2 gives [3, 5]; only entries at indices 3, 4, 5 should appear
