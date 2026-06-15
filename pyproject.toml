@@ -14,6 +14,10 @@ dependencies = [
 
 [project.optional-dependencies]
 extended = ["randomgen>=1.23.0"]
+docs = [
+    "sphinx>=7.1.2",
+    "sphinx-markdown-builder>=0.6.10",
+]
 
 [project.urls]
 Homepage = "https://github.com/jyurkiw/py-die-roller"
